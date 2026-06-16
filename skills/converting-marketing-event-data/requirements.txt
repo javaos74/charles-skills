@@ -1,0 +1,4 @@
+pandas>=2.0
+openpyxl>=3.1
+thefuzz>=0.22
+korean-romanizer>=0.25

@@ -1,0 +1,51 @@
+# Python
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+build/
+dist/
+pip-wheel-metadata/
+*.egg
+.eggs/
+*.egg-info/
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# OMC state files written by the harness during interactive sessions
+.omc/
+
+# Excel files contain PII — never commit real event data.
+# Whitelist anonymized samples under examples/.
+**/*.xlsx
+**/*.xls
+**/*.xlsm
+~$*
+!**/examples/*.xlsx
+
+# Type check / caches
+.mypy_cache/
+.cache/
+
+# Testing / coverage
+.tox/
+.coverage
+coverage.xml
+htmlcov/
+
+# Env / secrets
+.env
+.env.*
+.secrets
+
+# Node (multi-skill repos often contain JS parts)
+node_modules/
+
+# Optional helpful ignores
+.python-version
