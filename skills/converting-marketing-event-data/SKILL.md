@@ -44,7 +44,7 @@ Identify three files. Ask the user only when ambiguous.
 ### Step 2 — Inspect source schema
 
 ```bash
-./venv/bin/python .claude/skills/converting-marketing-event-data/reference/source_inspector.py <SOURCE_XLSX>
+./venv/bin/python <SKILL_DIR>/reference/source_inspector.py <SOURCE_XLSX>
 ```
 
 The inspector lists every sheet, its columns, a sample row, and a suggested `FIELD_MAP` keyed by canonical concept (`name`, `email`, `company_kr`, `title`, etc.). Show the proposal to the user via `AskUserQuestion` if any canonical concept is missing or ambiguous.
@@ -66,7 +66,7 @@ If the template revision differs (column shifts, renamed sheet), update the call
 Copy the skeleton and edit three sections:
 
 ```bash
-cp .claude/skills/converting-marketing-event-data/reference/converter_skeleton.py \
+cp <SKILL_DIR>/reference/converter_skeleton.py \
    convert_<EVENT>_<YYYYMMDD>.py
 ```
 

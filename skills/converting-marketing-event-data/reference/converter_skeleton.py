@@ -16,7 +16,7 @@ import pandas as pd
 
 # Adjust the import path if you copy this file elsewhere.
 sys.path.insert(0, os.path.dirname(__file__))
-from company_resolver import build_company_maps, resolve_company  # noqa: E402
+from company_resolver import load_company_index  # noqa: E402
 from constants_extractor import build_event_constants  # noqa: E402
 from enum_mappers import map_department, map_industry, map_job_level  # noqa: E402
 from name_splitter import split_name  # noqa: E402
@@ -28,6 +28,10 @@ from template_writer import (  # noqa: E402
 
 # ---- 1. EDIT: source schema for this event ----------------------------------
 SOURCE_SHEET = 'Fusion2026Data'
+
+# Optional event-specific company master sheet inside the SOURCE file. It only
+# SUPPLEMENTS the bundled reference/company_mappings.xlsx (which is always the
+# primary lookup). Set to None when the vendor export has no such sheet.
 COMPANY_SHEET = 'CompanyNames'
 
 # Map canonical Marketo concept -> source column name in SOURCE_SHEET.
@@ -42,10 +46,16 @@ FIELD_MAP = {
     'channel': '유입경로',  # used to derive Requires Sales Follow-up
 }
 
-# Master sheet column names. Set via build_company_maps if different.
+# Column names inside COMPANY_SHEET (the event supplement), when present.
 COMPANY_KR_COL = '한글 회사명'
 COMPANY_EN_COL = '영문 회사명'
 COMPANY_INDUSTRY_COL = 'Industry'
+
+# Fuzzy match acceptance (>= FUZZY_THRESHOLD) and nearest-name adoption
+# (>= REVIEW_THRESHOLD, flagged for human review). Set REVIEW_THRESHOLD = 0 to
+# always adopt the most similar known name instead of romanizing.
+FUZZY_THRESHOLD = 88
+REVIEW_THRESHOLD = 65
 
 # ---- 2. EDIT: per-event constants ------------------------------------------
 # Constants for 고정값-marked columns (template row 2) are pulled from the
@@ -88,21 +98,26 @@ FOLLOW_UP_KEYWORDS = [
 FOLLOW_UP_NEGATIVE_KEYWORDS = ['자료요청', '자료 요청', '아니오', '무응답']
 
 
-def build_row(src, df_companies, company_map, industry_map, event_constants,
-              valid_industries, valid_job_levels, valid_departments):
+def build_row(src, company_index, event_constants,
+              valid_industries, valid_job_levels, valid_departments,
+              match_log=None):
     full_name = src.get(FIELD_MAP['name'], '')
     first, last = split_name(str(full_name or ''))
 
     kr_company = src.get(FIELD_MAP['company_kr'], '')
     src_en = src.get(FIELD_MAP['company_en']) if FIELD_MAP.get('company_en') else None
-    en_company, industry = resolve_company(
-        kr_company, src_en, df_companies, company_map, industry_map,
+    # Primary lookup is reference/company_mappings.xlsx; unmatched 한글 회사명
+    # fall back to the most similar known English name (flagged for review).
+    match = company_index.resolve(
+        kr_company, src_en,
         infer_industry_fn=lambda txt: map_industry(
             f"{kr_company} {src.get(FIELD_MAP['department'], '')} {src.get(FIELD_MAP['title'], '')}",
             valid_industries,
         ),
-        kr_col=COMPANY_KR_COL,
     )
+    en_company, industry = match.company, match.industry
+    if match_log is not None and match.needs_review:
+        match_log.append(match)
     if industry is None or industry not in valid_industries:
         industry = map_industry(
             f"{kr_company} {src.get(FIELD_MAP['department'], '')} {src.get(FIELD_MAP['title'], '')}",
@@ -147,11 +162,21 @@ def main(input_file, output_file, template_file, prior_result=None):
     # leading 0 (Excel int 1097676948 -> str '1097676948', then normalize).
     dtype_map = {FIELD_MAP['phone']: str} if FIELD_MAP.get('phone') else None
     df_source = pd.read_excel(input_file, sheet_name=SOURCE_SHEET, dtype=dtype_map)
-    df_companies = pd.read_excel(input_file, sheet_name=COMPANY_SHEET)
     valid_industries, valid_job_levels, valid_departments = load_template_enums(template_file)
-    company_map, industry_map = build_company_maps(
-        df_companies, COMPANY_KR_COL, COMPANY_EN_COL, COMPANY_INDUSTRY_COL,
+
+    # Bundled reference/company_mappings.xlsx is the primary company lookup.
+    # COMPANY_SHEET, when present, only adds names the bundled file lacks.
+    df_extra = (pd.read_excel(input_file, sheet_name=COMPANY_SHEET)
+                if COMPANY_SHEET else None)
+    company_index = load_company_index(
+        extra_df=df_extra,
+        extra_kr_col=COMPANY_KR_COL,
+        extra_en_col=COMPANY_EN_COL,
+        extra_industry_col=COMPANY_INDUSTRY_COL,
+        fuzzy_threshold=FUZZY_THRESHOLD,
+        review_threshold=REVIEW_THRESHOLD,
     )
+    print(f'Company mappings loaded: {len(company_index)} names.')
 
     extracted = build_event_constants(template_file, prior_result) if prior_result else {}
     event_constants = {**extracted, **EVENT_CONSTANTS_OVERRIDE}
@@ -163,20 +188,28 @@ def main(input_file, output_file, template_file, prior_result=None):
         print(f'WARNING: missing per-event constants {missing}. '
               f'Add them to EVENT_CONSTANTS_OVERRIDE or pick a prior result that has them filled.')
 
-    rows, skipped = [], []
+    rows, skipped, match_log = [], [], []
     for idx, src in df_source.iterrows():
         if not src.get(FIELD_MAP['email']) or pd.isna(src.get(FIELD_MAP['email'])):
             skipped.append(idx)
             continue
         rows.append(build_row(
-            src.to_dict(), df_companies, company_map, industry_map, event_constants,
+            src.to_dict(), company_index, event_constants,
             valid_industries, valid_job_levels, valid_departments,
+            match_log=match_log,
         ))
 
     write_rows(template_file, output_file, rows, column_map=DEFAULT_COLUMN_MAP)
     print(f'Processed {len(rows)} rows. Saved to {output_file}')
     if skipped:
         print(f'Skipped {len(skipped)} rows (missing email): {skipped[:10]}{"..." if len(skipped) > 10 else ""}')
+    if match_log:
+        # Company names only — no email / phone (PII stays out of the log).
+        print(f'Company names needing review: {len(match_log)}')
+        for m in match_log:
+            score = f' {m.score}' if m.score else ''
+            matched = f' (matched {m.matched_kr})' if m.matched_kr else ''
+            print(f'  [{m.method}{score}] {m.query} -> {m.company}{matched}')
 
 
 if __name__ == '__main__':

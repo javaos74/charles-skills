@@ -1,0 +1,4 @@
+interface:
+  display_name: "Convert Marketing Event Data"
+  short_description: "Convert event Excel data into Marketo lead imports"
+  default_prompt: "Use $converting-marketing-event-data to convert this event attendee workbook into a validated Marketo import file."
